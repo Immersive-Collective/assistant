@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>Assistant • Chat</title>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css') }}">
+</head>
+<body>
+
+  <div class="wrap">
+
+    <div class="topline">
+      <span id="healthDot" class="dot"></span>
+      <span id="healthText">Checking model…</span>
+      <span class="meta" style="margin-left:auto;">
+        <label class="meta">
+          Model:
+          <select id="modelSelect"></select>
+        </label>
+        <span id="ctxText"></span>
+      </span>
+    </div>
+
+    <div id="chat" class="chat" aria-live="polite"></div>
+
+    <div class="row">
+      <div class="box">
+        <textarea id="prompt" placeholder="Type a message… (Enter = send, Shift+Enter = newline)"></textarea>
+        <button id="sendBtn">Send</button>
+      </div>
+    </div>
+
+    {% if show_tech %}
+    <div class="panel" style="margin:10px;">
+      <div class="meta"><b>Advanced</b> — temp/top-p/max tokens</div>
+      <div style="display:flex; gap:10px; margin-top:8px;">
+        <label class="meta">Max tokens <input id="maxTokens" type="number" min="1" max="4096" value="512"></label>
+        <label class="meta">Temperature <input id="temperature" type="number" step="0.1" min="0" max="2" value="0.6"></label>
+        <label class="meta">Top-p <input id="topP" type="number" step="0.05" min="0" max="1" value="0.9"></label>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <script>
+    const $ = s => document.querySelector(s);
+    const chat = $('#chat'); const sendBtn = $('#sendBtn'); const promptEl = $('#prompt');
+    let history = [];
+
+    function addMsg(role, text){
+      const wrap = document.createElement('div'); wrap.className = 'msg ' + (role === 'user' ? 'user' : 'asst');
+      const pre = document.createElement('div'); pre.className = 'pre'; pre.textContent = text; wrap.appendChild(pre);
+      chat.appendChild(wrap); chat.scrollTop = chat.scrollHeight;
+    }
+
+    async function health(){
+      try {
+        const r = await fetch('/llama/health', { cache: 'no-store' });
+        const j = await r.json().catch(()=>({}));
+        const ok = j && j.import_ok && j.resolved_exists;
+        $('#healthDot').classList.toggle('live', !!ok);
+        $('#healthText').textContent = ok ? 'Ready' : 'Unavailable';
+
+        // populate models
+        const select = $('#modelSelect');
+        select.innerHTML = '';
+        (j.discovered || []).forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = m.split('/').pop();
+
+          if (j.resolved_path && j.resolved_path.endsWith(opt.textContent)) {
+            opt.selected = true;
+          }
+
+          select.appendChild(opt);
+        });
+        $('#ctxText').textContent = (j?.cfg?.n_ctx !== undefined) ? ` • Ctx: ${j.cfg.n_ctx}` : '';
+      } catch { $('#healthText').textContent = 'Unavailable'; }
+    }
+
+    async function switchModel(path){
+      await fetch('/llama/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': '' },
+        body: JSON.stringify({ model_path: path })
+      });
+      history = [];  // clear old conversation
+      addMsg('asst', `🔄 Model switched to: ${path.split('/').pop()}`);
+      await health();
+    }
+
+
+    async function send(){
+      const text = promptEl.value.trim(); if (!text) return;
+      history.push({ role: 'user', content: text }); addMsg('user', text); promptEl.value = ''; sendBtn.disabled = true;
+
+      const body = { messages: history };
+      try {
+        const res = await fetch('/assistant', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        if (!res.ok || !res.body) { addMsg('asst', `Error: HTTP ${res.status}`); return; }
+        const reader = res.body.getReader(); const decoder = new TextDecoder();
+        let asstText = '';
+        while (true) {
+          const {done, value} = await reader.read(); if (done) break;
+          const t = decoder.decode(value, {stream:true});
+          asstText += t;
+        }
+        addMsg('asst', asstText);
+        history.push({ role: 'assistant', content: asstText });
+      } finally { sendBtn.disabled = false; }
+    }
+
+    $('#modelSelect').addEventListener('change', e => switchModel(e.target.value));
+    promptEl.addEventListener('keydown', (e)=>{ if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
+    sendBtn.addEventListener('click', send);
+
+    health();
+  </script>
+</body>
+</html>
