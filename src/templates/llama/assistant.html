@@ -14,14 +14,17 @@
     <div class="topline">
       <span id="healthDot" class="dot"></span>
       <span id="healthText">Checking model…</span>
+
       <span class="meta" style="margin-left:auto;">
-        <label class="meta">
+        <label class="model-label">
           Model:
-          <select id="modelSelect"></select>
+          <select id="modelSelect" class="model-select"></select>
         </label>
+        <button id="themeToggle" class="theme-toggle">🌙</button>
         <span id="ctxText"></span>
       </span>
     </div>
+
 
     <div id="chat" class="chat" aria-live="polite"></div>
 
@@ -50,10 +53,24 @@
     let history = [];
 
     function addMsg(role, text){
-      const wrap = document.createElement('div'); wrap.className = 'msg ' + (role === 'user' ? 'user' : 'asst');
-      const pre = document.createElement('div'); pre.className = 'pre'; pre.textContent = text; wrap.appendChild(pre);
-      chat.appendChild(wrap); chat.scrollTop = chat.scrollHeight;
+      const wrap = document.createElement('div'); 
+      wrap.className = 'msg ' + (role === 'user' ? 'user' : 'asst');
+
+      const pre = document.createElement('div'); 
+      pre.className = 'pre'; 
+      pre.textContent = text; 
+      wrap.appendChild(pre);
+
+      // Add timestamp
+      const ts = document.createElement('div');
+      ts.className = 'ts';
+      ts.textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      wrap.appendChild(ts);
+
+      chat.appendChild(wrap); 
+      chat.scrollTop = chat.scrollHeight;
     }
+
 
     async function health(){
       try {
@@ -117,7 +134,80 @@
     promptEl.addEventListener('keydown', (e)=>{ if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
     sendBtn.addEventListener('click', send);
 
-    health();
-  </script>
+    const themeBtn = $('#themeToggle');
+    const DB_NAME = 'assistantSettings';
+    const STORE_NAME = 'prefs';
+
+  // --- IndexedDB helpers ---
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = e => {
+          e.target.result.createObjectStore(STORE_NAME);
+        };
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e);
+      });
+    }
+
+    async function saveDB(key, value) {
+      try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(value, key);
+        return tx.complete;
+      } catch (e) {
+        console.warn('DB save failed', e);
+      }
+    }
+
+    async function loadDB(key) {
+      try {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, 'readonly');
+          const req = tx.objectStore(STORE_NAME).get(key);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject();
+        });
+      } catch {
+        return null;
+      }
+    }
+
+  // --- Theme handling ---
+    async function applyTheme(theme) {
+      document.documentElement.classList.toggle('light', theme === 'light');
+      themeBtn.textContent = theme === 'light' ? '🌞' : '🌙';
+      localStorage.setItem('theme', theme);
+      await saveDB('theme', theme);
+    }
+
+    async function loadTheme() {
+    // Try localStorage first
+      let theme = localStorage.getItem('theme');
+      if (!theme) {
+        theme = await loadDB('theme');
+      }
+      if (!theme) {
+      theme = 'dark'; // default
+    }
+    applyTheme(theme);
+  }
+
+  themeBtn.addEventListener('click', async () => {
+    const isLight = document.documentElement.classList.toggle('light');
+    const theme = isLight ? 'light' : 'dark';
+    themeBtn.textContent = isLight ? '🌞' : '🌙';
+    localStorage.setItem('theme', theme);
+    await saveDB('theme', theme);
+  });
+
+  loadTheme();
+
+
+  health();
+
+</script>
 </body>
 </html>
