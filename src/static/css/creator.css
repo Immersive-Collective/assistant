@@ -1,0 +1,36 @@
+#previewPane > iframe { flex: 1 1 auto; min-height: 0; }
+#previewPane { min-height: 0; }
+
+/* <details> is not resizable anymore */
+#editorDetails {
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+  overflow: visible;
+  display: block;
+}
+#editorDetails > summary {
+  margin-bottom: 8px;
+  cursor: default;
+}
+
+/* The resizable container that owns the editor height */
+.editor-shell {
+  height: var(--editor-h, 320px);
+  min-height: 150px;
+  max-height: 70vh;
+  resize: vertical;
+  overflow: auto;              /* required for native resize */
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #0f1320;
+}
+
+/* Monaco fills the shell */
+#codeEditor {
+  height: 100%;
+  width: 100%;
+  block-size: 100%;
+  inline-size: 100%;
+}

@@ -17,18 +17,16 @@
   --muted: #555a70;
   --text: #1a1b1f;
   --accent: #3b63ff;
-  --user: #e0e6ff;   /* user bubbles: light blue */
-  --asst: #f2f3f7;   /* assistant bubbles: light gray */
+  --user: #e0e6ff;   /* user bubbles */
+  --asst: #f2f3f7;   /* assistant bubbles */
   --border: #d0d3e0;
 }
 
-/* Global reset */
+/* Reset */
 * {
   box-sizing: border-box;
 }
-
-html,
-body {
+html, body {
   height: 100%;
   margin: 0;
   background: var(--bg);
@@ -41,42 +39,78 @@ body {
 /* Layout */
 .wrap {
   display: grid;
-  grid-template-rows: auto 1fr auto; /* topline, chat, input */
-  height: 100%;
+  grid-template-rows: auto 1fr auto;
   min-height: 100dvh;
+  height: 100%;
 }
-
 
 .topline {
-    padding: 10px 14px;
-    font-size: 12px;
-    color: var(--muted);
-    border-bottom: 1px solid var(--border);
-    background: var(--panel);
-    display: flex;
-    align-items: center;   /* vertically center items */
-    justify-content: space-between; /* push left vs right content apart */
-    gap: 10px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #3b3f55;
+
+/* Layout */
+.layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: calc(100vh - 42px);
+  /* no transition by default to avoid boot flash */
+  transition: none;
+}
+/* transitions are enabled only after JS adds .anim */
+.layout.anim {
+  transition: grid-template-columns .3s ease;
 }
 
-.live {
-  background: #2ecc71;
-  box-shadow: 0 0 0 6px rgba(46, 204, 113, .12);
+/* Sidebar */
+#sidebar {
+  width: 280px;
+  min-width: 280px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  /* no transition by default to avoid boot flash */
+  transition: none;
+  will-change: transform;
+}
+/* transitions are enabled only after JS adds .anim */
+#sidebar.anim {
+  transition: transform .3s ease;
 }
 
-.hidden {
-  display: none;
+/* assistant.css — swap this block exactly (replaces the two collapsed selectors) */
+.sidebar-collapsed .layout { grid-template-columns: 0 1fr; }
+.sidebar-collapsed #sidebar { transform: translateX(-100%); }
+
+
+
+
+
+/* Sidebar toggle button */
+#sidebarToggle {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 4px 8px;
+  color: var(--text);
+  transition: color .2s;
+}
+#sidebarToggle:hover {
+  color: var(--accent);
 }
 
-/* Chat area */
+/* Chat */
 .chat {
   height: 100%;
   overflow-y: auto;
@@ -87,7 +121,7 @@ body {
   flex-direction: column;
   gap: 14px;
   scroll-behavior: smooth;
-  background: radial-gradient(80% 60% at 50% -10%, rgba(91, 140, 255, .06), transparent 70%);
+  background: radial-gradient(80% 60% at 50% -10%, rgba(91,140,255,.06), transparent 70%);
 }
 
 .msg {
@@ -95,24 +129,20 @@ body {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, .1);
+  box-shadow: 0 4px 12px rgba(0,0,0,.1);
   font-size: 14px;
   line-height: 1.45;
   word-wrap: break-word;
   overflow-wrap: anywhere;
 }
-
 .msg.user {
   align-self: flex-end;
   background: var(--user);
   border-color: var(--accent);
-  color: var(--text);
 }
-
 .msg.asst {
   align-self: flex-start;
   background: var(--asst);
-  color: var(--text);
 }
 
 /* Input row */
@@ -124,57 +154,58 @@ body {
   background: var(--panel);
   padding-bottom: calc(10px + env(safe-area-inset-bottom));
 }
-
 .row .box {
-  flex: 1 1 auto;
+  flex: 1;
   display: flex;
   gap: 10px;
   align-items: stretch;
   min-width: 0;
 }
 
-/* Inputs and buttons */
-input,
-textarea,
-select,
-button {
-  font-size: 0.8rem;
-  border-radius: var(--radius);
-}
-
+/* Inputs */
 textarea {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1;
   resize: none;
   min-height: 52px;
   max-height: 30vh;
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
-  padding: 12px 12px;
+  border-radius: var(--radius);
+  padding: 12px;
   outline: none;
   line-height: 1.35;
 }
-
-button {
-  border: 1px solid var(--border);
-  background: var(--accent);
-  color: #fff;
-  padding: 0 16px;
+input, select {
+  font-size: 0.85rem;
   border-radius: var(--radius);
-  cursor: pointer;
-  font-weight: 600;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, .2);
-  min-width: 90px;
-  flex: 0 0 auto;
 }
 
+/* Buttons */
+button {
+  border: 1px solid #2a3152;
+  background: linear-gradient(180deg, #1b2140, #111737);
+  color: #e8ecff;
+  padding: 6px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+  transition: background .2s, transform .1s;
+}
+button:hover {
+  background: linear-gradient(180deg, #2a3660, #141a40);
+}
+button:active {
+  transform: scale(0.96);
+}
 button:disabled {
   opacity: .6;
   cursor: not-allowed;
 }
 
-/* Metadata text */
+/* Meta text */
 .meta {
   display: flex;
   align-items: center;
@@ -191,14 +222,14 @@ button:disabled {
   user-select: none;
 }
 
-/* Preformatted inside bubbles */
+/* Preformatted */
 .msg .pre {
   white-space: pre-wrap;
   font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: inherit;
 }
 
-/* Advanced panel */
+/* Panel */
 .panel {
   border: 1px dashed var(--border);
   border-radius: var(--radius);
@@ -212,9 +243,7 @@ button:disabled {
   align-items: center;
   gap: 6px;
   font-size: 0.9rem;
-  color: var(--text);
 }
-
 .model-select {
   background: var(--panel);
   color: var(--text);
@@ -222,22 +251,18 @@ button:disabled {
   border-radius: 8px;
   padding: 4px 8px;
   font-size: 0.9rem;
-  transition: border 0.2s, box-shadow 0.2s;
-  appearance: none;
+  transition: border .2s, box-shadow .2s;
   cursor: pointer;
 }
-
 .model-select:hover {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(91, 140, 255, 0.25);
+  box-shadow: 0 0 0 2px rgba(91,140,255,.25);
 }
-
 .model-select:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(91, 140, 255, 0.35);
+  box-shadow: 0 0 0 2px rgba(91,140,255,.35);
 }
-
 .model-select option {
   background: var(--panel);
   color: var(--text);
@@ -248,7 +273,26 @@ button:disabled {
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 1rem;
-  line-height: 1;
+  font-size: 1.2rem;
   padding: 4px;
+  color: var(--text);
+  transition: color .2s;
 }
+.theme-toggle:hover {
+  color: var(--accent);
+}
+
+/* Health indicator dot */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b3f55; /* default gray */
+  display: inline-block;
+}
+
+.dot.live {
+  background: #2ecc71; /* green */
+  box-shadow: 0 0 0 6px rgba(46, 204, 113, .12);
+}
+

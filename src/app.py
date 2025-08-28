@@ -75,7 +75,7 @@ PREFERRED_MODELS = [
 ]
 
 DEFAULT_CFG = {
-    "n_ctx": int(os.getenv("LLAMA_N_CTX", 2048)),
+    "n_ctx": int(os.getenv("LLAMA_N_CTX", 4096)),
     "n_batch": int(os.getenv("LLAMA_N_BATCH", 128)),
     "n_gpu_layers": int(os.getenv("LLAMA_N_GPU_LAYERS", 10)),  # >0 to offload on Metal/CUDA
     "use_mlock": False,
@@ -378,6 +378,103 @@ def assistant_generate():
     resp = Response(stream_plain(), mimetype="text/plain")
     resp.headers["X-Accel-Buffering"] = "no"
     return resp
+
+
+
+########################################################################
+# CREATOR
+########################################################################
+
+@app.get("/creator")
+@login_required
+@nocache
+def creator_ui():
+    try:
+        return render_template(
+            "llama/creator.html",
+            show_tech=bool(app.config.get("ASSISTANT_SHOW_TECH", False)),
+        )
+    except Exception:
+        log.exception("[CREATOR] Failed to render llama/creator.html")
+        return ("Template error", 500)
+
+@app.post("/creator")
+@login_required
+@nocache
+@limiter.limit("30/minute")
+def creator_generate():
+    data = request.get_json(silent=True) or {}
+    messages = data.get("messages") or []
+    if not messages:
+        return jsonify({"error": "Missing 'messages'."}), 400
+
+    def build_convo(msgs):
+        s = f"System: {SYSTEM_HINT}\n\n"
+        for m in msgs:
+            role = m.get("role", "user")
+            c = (m.get("content") or "").strip()
+            if not c:
+                continue
+            if role == "user":
+                s += f"User: {c}\n"
+            elif role == "assistant":
+                s += f"Assistant: {c}\n"
+            else:
+                s += f"{role.capitalize()}: {c}\n"
+        return s + "Assistant: "
+
+    llm = _get_llm()
+    try:
+        n_ctx = int(getattr(llm, "context_params").n_ctx)
+    except Exception:
+        n_ctx = DEFAULT_CFG.get("n_ctx", 2048)
+
+    SAFE_MARGIN = 8
+    MIN_GEN = 32
+    trimmed = list(messages[-12:])
+
+    while True:
+        convo = build_convo(trimmed)
+        used = len(llm.tokenize(convo.encode("utf-8"), add_bos=False))
+        head = n_ctx - SAFE_MARGIN - used
+        if head >= MIN_GEN or len(trimmed) <= 1:
+            break
+        trimmed.pop(0)
+
+    convo = build_convo(trimmed)
+    used = len(llm.tokenize(convo.encode("utf-8"), add_bos=False))
+    head = n_ctx - SAFE_MARGIN - used
+    if head < MIN_GEN:
+        return jsonify({"error": "context_overflow",
+                        "detail": f"Prompt too large for n_ctx={n_ctx}. Reduce input."}), 413
+
+    req_max = int(data.get("max_tokens", 1024))
+    max_tokens = max(MIN_GEN, min(req_max, head))
+    temperature = float(data.get("temperature", 0.6))
+    top_p = float(data.get("top_p", 0.9))
+
+    def stream_plain():
+        try:
+            for out in llm(
+                prompt=convo,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                stop=["User:", "System:", "Assistant:"],
+                stream=True,
+            ):
+                text = (out.get("choices") or [{}])[0].get("text", "")
+                if text:
+                    yield text
+        except Exception:
+            log.exception("[CREATOR] Generation failed")
+            yield "\n[error]\n"
+
+    resp = Response(stream_plain(), mimetype="text/plain")
+    resp.headers["X-Accel-Buffering"] = "no"
+    return resp
+
+
 
 # --------------------------- Main -----------------------------
 

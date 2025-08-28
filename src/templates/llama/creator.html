@@ -1,0 +1,699 @@
+<!-- templates/llama/creator.html — full drop-in replacement with Monaco editor synced to Live Preview -->
+<!DOCTYPE html>
+<html lang="en" class="{% if request.cookies.get('sidebarCollapsed') == '1' %}sidebar-collapsed{% endif %}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>Creator • Chat + Preview</title>
+  
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/creator.css') }}">
+
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topline">
+      <button id="sidebarToggle" aria-label="Toggle sidebar">☰</button>
+      <span id="logo">🌈 Open Company</span>
+      <span id="healthDot" class="dot"></span>
+      <span id="healthText">Checking model…</span>
+      <span class="meta" style="margin-left:auto;">
+        <label class="model-label">
+          Model:
+          <select id="modelSelect" class="model-select"></select>
+        </label>
+        <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">🌙</button>
+        <span id="ctxText"></span>
+      </span>
+    </div>
+
+    <div class="layout">
+      <aside id="sidebar" style="border-right:1px solid var(--border); background:var(--panel); display:flex; flex-direction:column;">
+        <div style="display:flex; gap:8px; padding:10px; border-bottom:1px solid var(--border); align-items:center;">
+          <button id="newChatBtn">New chat</button>
+          <input id="searchConv" type="search" placeholder="Search…" style="flex:1; background:#0f1320; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:6px 8px;">
+        </div>
+        <div id="convList" style="overflow:auto; padding:8px; display:flex; flex-direction:column; gap:6px;"></div>
+      </aside>
+
+      <main id="main" style="display:grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 42px); overflow: hidden;">
+        <section style="display:grid; grid-template-rows: 1fr auto; border-right:1px solid var(--border); min-height:0; overflow:hidden;">
+          <div id="chat" class="chat" aria-live="polite"></div>
+          <div class="row">
+            <div class="box">
+              <textarea id="prompt" placeholder="Type a message… (Enter = send, Shift+Enter = newline)"></textarea>
+              <button id="sendBtn">Send</button>
+            </div>
+          </div>
+          {% if show_tech %}
+          <div class="panel" style="margin:10px;">
+            <div class="meta"><b>Advanced</b> — temp/top-p/max tokens</div>
+            <div style="display:flex; gap:10px; margin-top:8px;">
+              <label class="meta">Max tokens <input id="maxTokens" type="number" min="1" max="4096" value="1024"></label>
+              <label class="meta">Temperature <input id="temperature" type="number" step="0.1" min="0" max="2" value="0.6"></label>
+              <label class="meta">Top-p <input id="topP" type="number" step="0.05" min="0" max="1" value="0.9"></label>
+            </div>
+          </div>
+          {% endif %}
+        </section>
+
+        <section id="previewPane" style="display:flex; flex-direction:column; background:var(--panel); height: calc(100vh - 42px); overflow:hidden;">
+          <div style="display:flex; align-items:center; justify-content:space-between; padding:10px; border-bottom:1px solid var(--border);">
+            <div class="meta"><b>Live Preview</b></div>
+            <div class="meta" style="gap:6px;">
+              <button id="openInNew" title="Open preview in new tab">Open</button>
+              <button id="resetPreview" title="Clear preview">Clear</button>
+            </div>
+          </div>
+          <iframe id="previewFrame" sandbox="allow-scripts allow-forms allow-pointer-lock allow-popups allow-modals" style="flex:1; width:100%; border:0; background:#fff;"></iframe>
+          
+<!-- replace the existing Code Editor <details> block -->
+  <div style="border-top:1px solid var(--border); padding:8px;">
+    <details id="editorDetails" open>
+      <summary class="meta">Code Editor</summary>
+      <div id="editorShell" class="editor-shell">
+        <div id="codeEditor"></div>
+      </div>
+    </details>
+  </div>
+
+
+
+
+
+  <div style="border-top:1px solid var(--border); padding:8px;">
+    <details>
+      <summary class="meta">Last extracted HTML</summary>
+      <textarea id="lastHtml" readonly style="width:100%; height:120px; background:#0f1320; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:8px;"></textarea>
+    </details>
+  </div>
+</section>
+</main>
+</div>
+</div>
+
+
+
+
+<!-- templates/llama/creator.html — replace ONLY the entire <script>…</script> with this block -->
+<script>
+  const $ = s => document.querySelector(s);
+  const chat = $('#chat');
+  const sendBtn = $('#sendBtn');
+  const promptEl = $('#prompt');
+  const convList = $('#convList');
+  const searchConv = $('#searchConv');
+  const newChatBtn = $('#newChatBtn');
+  const previewFrame = $('#previewFrame');
+  const lastHtmlEl = $('#lastHtml');
+  const openInNewBtn = $('#openInNew');
+  const resetPreviewBtn = $('#resetPreview');
+
+  const editorDetails = document.getElementById('editorDetails');
+  const editorShell   = document.getElementById('editorShell'); // NEW
+  const codeEl        = document.getElementById('codeEditor');
+  const EDITOR_HEIGHT_KEY = 'creator_editor_shell_h_px';
+
+  let monacoEditor = null;
+
+  let history = [];
+  let currentConversationId = null;
+  let currentModelPath = null;
+
+  function addMsg(role, text) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + (role === 'user' ? 'user' : 'asst');
+    const pre = document.createElement('div');
+    pre.className = 'pre';
+    pre.textContent = text;
+    wrap.appendChild(pre);
+    const ts = document.createElement('div');
+    ts.className = 'ts';
+    ts.textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    wrap.appendChild(ts);
+    chat.appendChild(wrap);
+    chat.scrollTop = chat.scrollHeight;
+    return pre;
+  }
+
+  const DB_NAME = 'assistantDB';
+  const STORE_PREFS = 'prefs';
+  const STORE_CONV = 'conversations';
+
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 2);
+      req.onupgradeneeded = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(STORE_PREFS)) db.createObjectStore(STORE_PREFS);
+        if (!db.objectStoreNames.contains(STORE_CONV)) {
+          const conv = db.createObjectStore(STORE_CONV, { keyPath: 'id' });
+          conv.createIndex('updatedAt', 'updatedAt', { unique: false });
+          conv.createIndex('title', 'title', { unique: false });
+        }
+      };
+      req.onsuccess = e => resolve(e.target.result);
+      req.onerror = e => reject(e);
+    });
+  }
+
+  async function dbPutKV(key, value) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_PREFS, 'readwrite');
+      tx.oncomplete = () => resolve();
+      tx.onerror = e => reject(e.target.error);
+      tx.objectStore(STORE_PREFS).put(value, key);
+    });
+  }
+
+  async function dbGetKV(key) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_PREFS, 'readonly');
+      const req = tx.objectStore(STORE_PREFS).get(key);
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  async function createConversation(initialTitle = 'Creator chat') {
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    const conv = { id, title: initialTitle, messages: [], modelPath: currentModelPath || null, createdAt: now, updatedAt: now };
+    const db = await openDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_CONV, 'readwrite');
+      tx.oncomplete = resolve;
+      tx.onerror = e => reject(e.target.error);
+      tx.objectStore(STORE_CONV).add(conv);
+    });
+    await dbPutKV('lastCreatorConversationId', id);
+    return conv;
+  }
+
+  async function updateConversationMeta(id, fields) {
+    const conv = await getConversation(id);
+    if (!conv) return;
+    Object.assign(conv, fields, { updatedAt: Date.now() });
+    const db = await openDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_CONV, 'readwrite');
+      tx.oncomplete = resolve;
+      tx.onerror = e => reject(e.target.error);
+      tx.objectStore(STORE_CONV).put(conv);
+    });
+  }
+
+  async function appendMessage(id, message) {
+    const conv = await getConversation(id);
+    if (!conv) return;
+    conv.messages.push(message);
+    conv.updatedAt = Date.now();
+    const db = await openDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_CONV, 'readwrite');
+      tx.oncomplete = resolve;
+      tx.onerror = e => reject(e.target.error);
+      tx.objectStore(STORE_CONV).put(conv);
+    });
+  }
+
+  async function overwriteAssistantMessage(id, indexFromEnd, newContent) {
+    const conv = await getConversation(id);
+    if (!conv) return;
+    const idx = conv.messages.length - 1 - indexFromEnd;
+    if (idx >= 0 && conv.messages[idx]?.role === 'assistant') {
+      conv.messages[idx].content = newContent;
+      conv.updatedAt = Date.now();
+      const db = await openDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_CONV, 'readwrite');
+        tx.oncomplete = resolve;
+        tx.onerror = e => reject(e.target.error);
+        tx.objectStore(STORE_CONV).put(conv);
+      });
+    }
+  }
+
+  async function getConversation(id) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_CONV, 'readonly');
+      const req = tx.objectStore(STORE_CONV).get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  async function listConversations(filterText = '') {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_CONV, 'readonly');
+      const store = tx.objectStore(STORE_CONV).index('updatedAt');
+      const results = [];
+      store.openCursor(null, 'prev').onsuccess = e => {
+        const cursor = e.target.result;
+        if (cursor) {
+          const v = cursor.value;
+          if (!filterText || (v.title?.toLowerCase().includes(filterText.toLowerCase()))) results.push(v);
+          cursor.continue();
+        } else {
+          resolve(results);
+        }
+      };
+    });
+  }
+
+  async function deleteConversation(id) {
+    const db = await openDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_CONV, 'readwrite');
+      tx.oncomplete = resolve;
+      tx.onerror = e => reject(e.target.error);
+      tx.objectStore(STORE_CONV).delete(id);
+    });
+    const last = await dbGetKV('lastCreatorConversationId');
+    if (last === id) await dbPutKV('lastCreatorConversationId', null);
+  }
+
+  function renderConvList(items) {
+    convList.innerHTML = '';
+    items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'conv-item';
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '8px';
+      row.style.padding = '10px';
+      row.style.border = '1px solid var(--border)';
+      row.style.borderRadius = '12px';
+      row.style.background = '#0f1320';
+      row.dataset.id = item.id;
+
+      if (item.id === currentConversationId) {
+        row.style.borderColor = '#2a3a66';
+        row.style.background = '#121934';
+      }
+
+      const title = document.createElement('div');
+      title.className = 'conv-title';
+      title.style.flex = '1';
+      title.style.whiteSpace = 'nowrap';
+      title.style.overflow = 'hidden';
+      title.style.textOverflow = 'ellipsis';
+      title.textContent = item.title || 'Untitled';
+
+      const meta = document.createElement('div');
+      meta.className = 'conv-meta';
+      meta.style.fontSize = '11px';
+      meta.style.color = 'var(--muted)';
+      meta.textContent = new Date(item.updatedAt).toLocaleString();
+
+      const openBtn = document.createElement('button');
+      openBtn.textContent = 'Open';
+      openBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await loadConversationIntoUI(item.id);
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await deleteConversation(item.id);
+        if (currentConversationId === item.id) {
+          currentConversationId = null;
+          history = [];
+          chat.innerHTML = '';
+        }
+        await refreshConvList();
+      });
+
+      const right = document.createElement('div');
+      right.style.display = 'flex';
+      right.style.gap = '6px';
+      right.appendChild(openBtn);
+      right.appendChild(delBtn);
+
+      const col = document.createElement('div');
+      col.style.display = 'flex';
+      col.style.flexDirection = 'column';
+      col.style.gap = '4px';
+      col.style.flex = '1';
+      col.appendChild(title);
+      col.appendChild(meta);
+
+      row.appendChild(col);
+      row.appendChild(right);
+
+      row.addEventListener('click', async () => {
+        await loadConversationIntoUI(item.id);
+      });
+
+      convList.appendChild(row);
+    });
+  }
+
+  async function refreshConvList() {
+    const q = searchConv.value.trim();
+    const items = await listConversations(q);
+    renderConvList(items);
+  }
+
+  async function health(){
+    try {
+      const r = await fetch('/llama/health', { cache: 'no-store' });
+      const j = await r.json().catch(()=>({}));
+      const ok = j && j.import_ok && j.resolved_exists;
+      $('#healthDot').classList.toggle('live', !!ok);
+      $('#healthText').textContent = ok ? 'Ready' : 'Unavailable';
+
+      const select = $('#modelSelect');
+      select.innerHTML = '';
+      (j.discovered || []).forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m.split('/').pop();
+        if (j.resolved_path && (j.resolved_path === m || j.resolved_path.endsWith(opt.textContent))) opt.selected = true;
+        select.appendChild(opt);
+      });
+      $('#ctxText').textContent = (j?.cfg?.n_ctx !== undefined) ? ` • Ctx: ${j.cfg.n_ctx}` : '';
+      currentModelPath = j?.resolved_path || j?.cfg?.model_path || currentModelPath || null;
+    } catch {
+      $('#healthText').textContent = 'Unavailable';
+    }
+  }
+
+  async function switchModel(path, silent = false){
+    if (!path || path === currentModelPath) {
+      if ($('#modelSelect')) $('#modelSelect').value = path || $('#modelSelect').value;
+      return;
+    }
+    try {
+      const res = await fetch('/llama/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': '' },
+        body: JSON.stringify({ model_path: path })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      currentModelPath = path;
+      if ($('#modelSelect')) $('#modelSelect').value = path;
+      await updateConversationMeta(currentConversationId, { modelPath: currentModelPath });
+      await health();
+    } catch (e) {
+      console.log('switchModel error', e);
+    }
+  }
+
+  function makeBody() {
+    const maxTokensEl = document.getElementById('maxTokens');
+    const temperatureEl = document.getElementById('temperature');
+    const topPEl = document.getElementById('topP');
+    return {
+      messages: history,
+      ...(maxTokensEl ? { max_tokens: Number(maxTokensEl.value || 1024) } : {}),
+      ...(temperatureEl ? { temperature: Number(temperatureEl.value || 0.6) } : {}),
+      ...(topPEl ? { top_p: Number(topPEl.value || 0.9) } : {}),
+    };
+  }
+
+  async function ensureConversation() {
+    if (currentConversationId) return currentConversationId;
+    const firstTitle = history.find(m => m.role === 'user')?.content?.slice(0, 60) || 'Creator chat';
+    const conv = await createConversation(firstTitle);
+    currentConversationId = conv.id;
+    await refreshConvList();
+    return currentConversationId;
+  }
+
+  function extractHtmlFrom(text) {
+    try {
+      const fence = /```html\s*([\s\S]*?)```/i;
+      const m1 = text.match(fence);
+      if (m1 && m1[1]) return m1[1].trim();
+      const hasTag = /<(html|!doctype|head|body|div|section|article|main|header|footer|nav|script|style)[\s>]/i.test(text);
+      if (hasTag) return text.trim();
+    } catch (e) { console.debug('[extractHtmlFrom] failed', e); }
+    return '';
+  }
+
+  function renderPreview(html) {
+    try {
+      lastHtmlEl.value = html || '';
+      const doc = html || '<!DOCTYPE html><meta charset="utf-8"><title>Preview</title><p>No HTML detected.</p>';
+      previewFrame.srcdoc = doc;
+      console.debug('[preview] updated', { length: doc.length });
+    } catch (e) {
+      console.warn('[preview] failed', e);
+    }
+  }
+
+  function setEditorValue(html) {
+    if (!monacoEditor) return;
+    const current = monacoEditor.getValue();
+    if (current !== html) {
+      monacoEditor.setValue(html);
+      console.debug('[editor] value set', { length: html.length });
+    }
+  }
+
+  openInNewBtn.addEventListener('click', () => {
+    try {
+      const blob = new Blob([previewFrame.srcdoc || ''], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      console.debug('[preview] opened in new tab');
+    } catch (e) { console.warn('[preview] open failed', e); }
+  });
+
+  resetPreviewBtn.addEventListener('click', () => {
+    renderPreview('');
+    setEditorValue('');
+  });
+
+  async function send(){
+    const text = promptEl.value.trim();
+    if (!text) return;
+    history.push({ role: 'user', content: text });
+    addMsg('user', text);
+    promptEl.value = '';
+    sendBtn.disabled = true;
+
+    await ensureConversation();
+    await appendMessage(currentConversationId, { role: 'user', content: text });
+
+    try {
+      const res = await fetch('/creator', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(makeBody())
+      });
+      if (!res.ok || !res.body) {
+        addMsg('asst', `Error: HTTP ${res.status}`);
+        await appendMessage(currentConversationId, { role: 'assistant', content: `Error: HTTP ${res.status}` });
+        await refreshConvList();
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let asstText = '';
+      const live = addMsg('asst', '');
+      await appendMessage(currentConversationId, { role: 'assistant', content: '' });
+
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        asstText += chunk;
+        live.textContent = asstText;
+      }
+
+      history.push({ role: 'assistant', content: asstText });
+      await overwriteAssistantMessage(currentConversationId, 0, asstText);
+
+      const html = extractHtmlFrom(asstText);
+      if (html) {
+        renderPreview(html);
+        setEditorValue(html);
+      }
+
+      const titleCandidate = history.find(m => m.role === 'user')?.content || 'Creator chat';
+      const newTitle = titleCandidate.slice(0, 60).trim();
+      await updateConversationMeta(currentConversationId, { title: newTitle });
+
+      await refreshConvList();
+    } catch (e) {
+      addMsg('asst', 'Error: stream failed');
+      console.log('send error', e);
+      await appendMessage(currentConversationId, { role: 'assistant', content: 'Error: stream failed' });
+      await refreshConvList();
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
+
+  async function loadConversationIntoUI(id) {
+    const conv = await getConversation(id);
+    if (!conv) return;
+    currentConversationId = id;
+    await dbPutKV('lastCreatorConversationId', id);
+    history = conv.messages.slice();
+    chat.innerHTML = '';
+    for (const m of history) addMsg(m.role, m.content);
+      if (conv.modelPath && currentModelPath !== conv.modelPath) await switchModel(conv.modelPath, true);
+    await refreshConvList();
+  }
+
+  const themeBtn = $('#themeToggle');
+
+  async function applyTheme(theme) {
+    document.documentElement.classList.toggle('light', theme === 'light');
+    themeBtn.textContent = theme === 'light' ? '🌞' : '🌙';
+    localStorage.setItem('theme', theme);
+    await dbPutKV('theme', theme);
+  }
+
+  async function loadTheme() {
+    let theme = localStorage.getItem('theme') || await dbGetKV('theme') || 'dark';
+    await applyTheme(theme);
+  }
+
+  themeBtn.addEventListener('click', async () => {
+    const isLight = !document.documentElement.classList.contains('light');
+    await applyTheme(isLight ? 'light' : 'dark');
+    if (monacoEditor) monacoEditor.layout();
+  });
+
+  $('#modelSelect').addEventListener('change', e => switchModel(e.target.value));
+  promptEl.addEventListener('keydown', (e)=>{ if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
+  sendBtn.addEventListener('click', send);
+  newChatBtn.addEventListener('click', async () => {
+    history = [];
+    chat.innerHTML = '';
+    const conv = await createConversation('Creator chat');
+    currentConversationId = conv.id;
+    await refreshConvList();
+  });
+  searchConv.addEventListener('input', refreshConvList);
+
+  const layout = document.querySelector('.layout');
+  const sidebar = $('#sidebar');
+  const sidebarToggle = $('#sidebarToggle');
+
+  async function applySidebarState(collapsed) {
+    document.documentElement.classList.toggle('sidebar-collapsed', collapsed);
+    try { await dbPutKV('sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+    try { document.cookie = `sidebarCollapsed=${collapsed ? '1' : '0'}; Path=/; Max-Age=31536000; SameSite=Lax`; } catch (e) {}
+    if (monacoEditor) monacoEditor.layout();
+  }
+
+  sidebarToggle.addEventListener('click', async () => {
+    const next = !document.documentElement.classList.contains('sidebar-collapsed');
+    await applySidebarState(next);
+  });
+
+  function initMonaco() {
+    if (!window.require) { console.warn('[monaco] loader not available'); return; }
+    if (!codeEl) { console.warn('[monaco] #codeEditor not found'); return; }
+
+    window.require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+    window.require(['vs/editor/editor.main'], function () {
+      monacoEditor = monaco.editor.create(codeEl, {
+        value: '<!DOCTYPE html>\n<meta charset="utf-8">\n<title>Preview</title>\n',
+        language: 'html',
+        theme: document.documentElement.classList.contains('light') ? 'vs' : 'vs-dark',
+        automaticLayout: false,
+        minimap: { enabled: false },
+        wordWrap: 'on',
+        fontSize: 13,
+        lineNumbers: 'on'
+      });
+
+      monacoEditor.onDidChangeModelContent(() => {
+        renderPreview(monacoEditor.getValue());
+      });
+
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => { if (monacoEditor) monacoEditor.layout(); });
+        ro.observe(codeEl);
+      if (editorShell) ro.observe(editorShell);      // NEW: track shell size changes
+      if (editorDetails) ro.observe(editorDetails);  // reflow when details toggles
+    }
+
+    window.addEventListener('resize', () => monacoEditor && monacoEditor.layout());
+    console.debug('[monaco] ready');
+  });
+  }
+
+
+  async function applySavedEditorHeight() {
+    try {
+      let h = await dbGetKV(EDITOR_HEIGHT_KEY);
+      if (!h) h = localStorage.getItem(EDITOR_HEIGHT_KEY);
+      if (h && editorShell) {
+        const px = Math.max(150, parseInt(h, 10) || 0);
+      // Use CSS var so the stylesheet rule controls height
+        editorShell.style.setProperty('--editor-h', px + 'px');
+      }
+    } catch (e) {}
+  }
+
+  function persistEditorHeight() {
+    if (!editorShell) return;
+    const px = Math.round(editorShell.getBoundingClientRect().height);
+    dbPutKV(EDITOR_HEIGHT_KEY, String(px)).catch(()=>{});
+    try { localStorage.setItem(EDITOR_HEIGHT_KEY, String(px)); } catch (e) {}
+  }
+
+  function watchEditorHeight() {
+    if (!editorShell || !window.ResizeObserver) return;
+    const obs = new ResizeObserver(() => {
+      persistEditorHeight();
+      if (monacoEditor) monacoEditor.layout();
+    });
+    obs.observe(editorShell);
+
+  // also react to details open/close
+    if (editorDetails) {
+      editorDetails.addEventListener('toggle', () => {
+        persistEditorHeight();
+        if (monacoEditor) monacoEditor.layout();
+      });
+    }
+  }
+
+
+  (async function boot(){
+    await loadTheme();
+    await health();
+    await refreshConvList();
+
+    await applySavedEditorHeight();   // ⟵ restore last editor height before Monaco mounts
+
+    const lastId = await dbGetKV('lastCreatorConversationId');
+    if (lastId) await loadConversationIntoUI(lastId);
+
+    const isCollapsed = document.documentElement.classList.contains('sidebar-collapsed');
+    try { await dbPutKV('sidebarCollapsed', isCollapsed ? '1' : '0'); } catch (e) {}
+
+    layout.classList.add('anim');
+    sidebar.classList.add('anim');
+    renderPreview('');
+
+    await applySavedEditorHeight(); // before initMonaco()
+    initMonaco();
+    watchEditorHeight();            // after initMonaco()
+
+    watchEditorHeight();              // ⟵ start persisting height changes
+    console.debug('[creator] boot complete', { isCollapsed });
+  })();
+</script>
+
+
+
+
+</body>
+</html>
