@@ -702,6 +702,96 @@
 
     console.debug('[creator] boot complete', { isCollapsed });
   })();
+
+
+// ─────────── Draggable divider (resize chat vs preview) ───────────
+  const dividerEl     = $('#divider');
+  const mainEl        = $('#main');
+  const chatSectionEl = $('#chatSection');
+  const previewPaneEl = $('#previewPane');
+  const CHAT_W_KEY    = 'creator_chat_w_px';
+
+  function setChatWidth(px, {layoutNow=true} = {}) {
+  const clamped = Math.max(240, Math.round(px)); // chat min
+  document.documentElement.style.setProperty('--chat-w', clamped + 'px');
+  if (layoutNow && monacoEditor) requestAnimationFrame(()=> monacoEditor.layout());
+}
+async function applySavedChatWidth() {
+  try {
+    let px = await dbGetKV(CHAT_W_KEY);
+    if (!px) px = localStorage.getItem(CHAT_W_KEY);
+    if (px) setChatWidth(parseInt(px, 10));
+  } catch {}
+}
+function persistChatWidth(px) {
+  dbPutKV(CHAT_W_KEY, String(px)).catch(()=>{});
+  try { localStorage.setItem(CHAT_W_KEY, String(px)); } catch {}
+}
+
+(function installDividerDrag(){
+  if (!dividerEl || !mainEl || !chatSectionEl || !previewPaneEl) return;
+
+  let startX = 0, startW = 0, mainW = 0, maxChat = 0, dragging = false, pid = null;
+
+  const MIN_CHAT    = 240; // matches CSS min-width on chat
+  const MIN_PREVIEW = 280; // matches CSS min-width on preview
+
+  function onPointerMove(e){
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    let next = startW + dx;
+    // Clamp so preview can't shrink below its min (account for divider width)
+    const dividerW = dividerEl.getBoundingClientRect().width;
+    maxChat = Math.max(MIN_CHAT, Math.round(mainW - dividerW - MIN_PREVIEW));
+    next = Math.max(MIN_CHAT, Math.min(next, maxChat));
+    setChatWidth(next);
+  }
+  function endDrag(){
+    if (!dragging) return;
+    dragging = false;
+    try { dividerEl.releasePointerCapture(pid); } catch {}
+    pid = null;
+    // persist
+    const w = chatSectionEl.getBoundingClientRect().width;
+    persistChatWidth(w);
+    // restore UI
+    if (previewFrame) previewFrame.style.pointerEvents = '';
+    document.body.style.cursor = '';
+    document.body.classList.remove('resizing');
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', endDrag, true);
+  }
+
+  on(dividerEl, 'pointerdown', (e) => {
+    // left button / primary pointer
+    startX = e.clientX;
+    startW = chatSectionEl.getBoundingClientRect().width;
+    mainW  = mainEl.getBoundingClientRect().width;
+    dragging = true;
+    pid = e.pointerId;
+    try { dividerEl.setPointerCapture(pid); } catch {}
+    // keep drag smooth
+    if (previewFrame) previewFrame.style.pointerEvents = 'none';
+    document.body.style.cursor = 'col-resize';
+    document.body.classList.add('resizing');
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', endDrag, true);
+  });
+
+  // Double-click divider to reset to 50/50
+  on(dividerEl, 'dblclick', () => {
+    const half = Math.round(mainEl.getBoundingClientRect().width / 2);
+    setChatWidth(half);
+    persistChatWidth(half);
+  });
+})();
+
+// Call once on boot to restore saved width
+applySavedChatWidth();
+
+
+
 </script>
 
 

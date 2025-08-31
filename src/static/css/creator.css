@@ -46,3 +46,5 @@
   white-space: normal;        /* allow wrapping */
   overflow-wrap: anywhere;    /* break long words/strings */
 }
+
+body.resizing { cursor: col-resize !important; }
