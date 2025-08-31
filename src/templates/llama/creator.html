@@ -7,6 +7,7 @@
   <title>Creator • Chat + Preview</title>
   
   <link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css') }}">
+  
   <link rel="stylesheet" href="{{ url_for('static', filename='css/creator.css') }}">
 
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
@@ -37,8 +38,9 @@
         <div id="convList" style="overflow:auto; padding:8px; display:flex; flex-direction:column; gap:6px;"></div>
       </aside>
 
-      <main id="main" style="display:grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 42px); overflow: hidden;">
-        <section style="display:grid; grid-template-rows: 1fr auto; border-right:1px solid var(--border); min-height:0; overflow:hidden;">
+      <main id="main" style="display:flex; height:calc(100vh - 42px); overflow:hidden;">
+        <!-- Chat column (left) -->
+        <section id="chatSection" style="flex:0 0 var(--chat-w, 50%); display:grid; grid-template-rows: 1fr auto; min-width:240px; border-right:1px solid var(--border); min-height:0; overflow:hidden;">
           <div id="chat" class="chat" aria-live="polite"></div>
           <div class="row">
             <div class="box">
@@ -46,6 +48,7 @@
               <button id="sendBtn">Send</button>
             </div>
           </div>
+
           {% if show_tech %}
           <div class="panel" style="margin:10px;">
             <div class="meta"><b>Advanced</b> — temp/top-p/max tokens</div>
@@ -58,7 +61,11 @@
           {% endif %}
         </section>
 
-        <section id="previewPane" style="display:flex; flex-direction:column; background:var(--panel); height: calc(100vh - 42px); overflow:hidden;">
+        <!-- Draggable vertical divider -->
+        <div id="divider" style="flex:0 0 6px; cursor:col-resize; background:var(--border); user-select:none;"></div>
+
+        <!-- Preview column (right) -->
+        <section id="previewPane" style="flex:1 1 auto; display:flex; flex-direction:column; background:var(--panel); height:calc(100vh - 42px); min-width:280px; overflow:hidden;">
           <div style="display:flex; align-items:center; justify-content:space-between; padding:10px; border-bottom:1px solid var(--border);">
             <div class="meta"><b>Live Preview</b></div>
             <div class="meta" style="gap:6px;">
@@ -66,57 +73,61 @@
               <button id="resetPreview" title="Clear preview">Clear</button>
             </div>
           </div>
+
           <iframe id="previewFrame" sandbox="allow-scripts allow-forms allow-pointer-lock allow-popups allow-modals" style="flex:1; width:100%; border:0; background:#fff;"></iframe>
-          
-<!-- replace the existing Code Editor <details> block -->
-  <div style="border-top:1px solid var(--border); padding:8px;">
-    <details id="editorDetails" open>
-      <summary class="meta">Code Editor</summary>
-      <div id="editorShell" class="editor-shell">
-        <div id="codeEditor"></div>
-      </div>
-    </details>
+
+          <!-- Code Editor -->
+          <div style="border-top:1px solid var(--border); padding:8px;">
+            <details id="editorDetails" open>
+              <summary class="meta">Code Editor</summary>
+              <div id="editorShell" class="editor-shell">
+                <div id="codeEditor"></div>
+              </div>
+            </details>
+          </div>
+
+          <div style="border-top:1px solid var(--border); padding:8px;">
+            <details>
+              <summary class="meta">Last extracted HTML</summary>
+              <textarea id="lastHtml" readonly style="width:100%; height:120px; background:#0f1320; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:8px;"></textarea>
+            </details>
+          </div>
+        </section>
+      </main>
+
+
+
+    </div>
   </div>
 
 
+  <script>
+    const $ = s => document.querySelector(s);
+    const on = (el, evt, fn, opts) => el && el.addEventListener(evt, fn, opts);
 
+  // Elements
+    const chat           = $('#chat');
+    const sendBtn        = $('#sendBtn');
+    const promptEl       = $('#prompt');
+    const convList       = $('#convList');
+    const searchConv     = $('#searchConv');
+    const newChatBtn     = $('#newChatBtn');
+    const previewFrame   = $('#previewFrame');
+    const lastHtmlEl     = $('#lastHtml');
+    const openInNewBtn   = $('#openInNew');
+    const resetPreviewBtn= $('#resetPreview');
+    const editorDetails  = $('#editorDetails');
+    const editorShell    = $('#editorShell');
+    const codeEl         = $('#codeEditor');
+  const modelSelectEl  = $('#modelSelect');   // may be absent on some templates
+  const themeBtn       = $('#themeToggle');
+  const layout         = $('.layout');
+  const sidebar        = $('#sidebar');
+  const sidebarToggle  = $('#sidebarToggle');
 
-
-  <div style="border-top:1px solid var(--border); padding:8px;">
-    <details>
-      <summary class="meta">Last extracted HTML</summary>
-      <textarea id="lastHtml" readonly style="width:100%; height:120px; background:#0f1320; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:8px;"></textarea>
-    </details>
-  </div>
-</section>
-</main>
-</div>
-</div>
-
-
-
-
-<!-- templates/llama/creator.html — replace ONLY the entire <script>…</script> with this block -->
-<script>
-  const $ = s => document.querySelector(s);
-  const chat = $('#chat');
-  const sendBtn = $('#sendBtn');
-  const promptEl = $('#prompt');
-  const convList = $('#convList');
-  const searchConv = $('#searchConv');
-  const newChatBtn = $('#newChatBtn');
-  const previewFrame = $('#previewFrame');
-  const lastHtmlEl = $('#lastHtml');
-  const openInNewBtn = $('#openInNew');
-  const resetPreviewBtn = $('#resetPreview');
-
-  const editorDetails = document.getElementById('editorDetails');
-  const editorShell   = document.getElementById('editorShell'); // NEW
-  const codeEl        = document.getElementById('codeEditor');
   const EDITOR_HEIGHT_KEY = 'creator_editor_shell_h_px';
 
   let monacoEditor = null;
-
   let history = [];
   let currentConversationId = null;
   let currentModelPath = null;
@@ -137,6 +148,7 @@
     return pre;
   }
 
+  // ─────────── IndexedDB helpers ───────────
   const DB_NAME = 'assistantDB';
   const STORE_PREFS = 'prefs';
   const STORE_CONV = 'conversations';
@@ -167,7 +179,6 @@
       tx.objectStore(STORE_PREFS).put(value, key);
     });
   }
-
   async function dbGetKV(key) {
     const db = await openDB();
     return new Promise((resolve) => {
@@ -192,8 +203,8 @@
     await dbPutKV('lastCreatorConversationId', id);
     return conv;
   }
-
   async function updateConversationMeta(id, fields) {
+    if (!id) return;
     const conv = await getConversation(id);
     if (!conv) return;
     Object.assign(conv, fields, { updatedAt: Date.now() });
@@ -205,8 +216,8 @@
       tx.objectStore(STORE_CONV).put(conv);
     });
   }
-
   async function appendMessage(id, message) {
+    if (!id) return;
     const conv = await getConversation(id);
     if (!conv) return;
     conv.messages.push(message);
@@ -219,8 +230,8 @@
       tx.objectStore(STORE_CONV).put(conv);
     });
   }
-
   async function overwriteAssistantMessage(id, indexFromEnd, newContent) {
+    if (!id) return;
     const conv = await getConversation(id);
     if (!conv) return;
     const idx = conv.messages.length - 1 - indexFromEnd;
@@ -236,7 +247,6 @@
       });
     }
   }
-
   async function getConversation(id) {
     const db = await openDB();
     return new Promise((resolve) => {
@@ -246,7 +256,6 @@
       req.onerror = () => resolve(null);
     });
   }
-
   async function listConversations(filterText = '') {
     const db = await openDB();
     return new Promise((resolve) => {
@@ -265,7 +274,6 @@
       };
     });
   }
-
   async function deleteConversation(id) {
     const db = await openDB();
     await new Promise((resolve, reject) => {
@@ -300,6 +308,7 @@
       const title = document.createElement('div');
       title.className = 'conv-title';
       title.style.flex = '1';
+      title.style.minWidth = '0';
       title.style.whiteSpace = 'nowrap';
       title.style.overflow = 'hidden';
       title.style.textOverflow = 'ellipsis';
@@ -313,14 +322,14 @@
 
       const openBtn = document.createElement('button');
       openBtn.textContent = 'Open';
-      openBtn.addEventListener('click', async (e) => {
+      on(openBtn, 'click', async (e) => {
         e.stopPropagation();
         await loadConversationIntoUI(item.id);
       });
 
       const delBtn = document.createElement('button');
       delBtn.textContent = 'Delete';
-      delBtn.addEventListener('click', async (e) => {
+      on(delBtn, 'click', async (e) => {
         e.stopPropagation();
         await deleteConversation(item.id);
         if (currentConversationId === item.id) {
@@ -342,22 +351,20 @@
       col.style.flexDirection = 'column';
       col.style.gap = '4px';
       col.style.flex = '1';
+      col.style.minWidth = '0';
       col.appendChild(title);
       col.appendChild(meta);
 
       row.appendChild(col);
       row.appendChild(right);
-
-      row.addEventListener('click', async () => {
-        await loadConversationIntoUI(item.id);
-      });
+      on(row, 'click', async () => { await loadConversationIntoUI(item.id); });
 
       convList.appendChild(row);
     });
   }
 
   async function refreshConvList() {
-    const q = searchConv.value.trim();
+    const q = (searchConv?.value || '').trim();
     const items = await listConversations(q);
     renderConvList(items);
   }
@@ -366,29 +373,52 @@
     try {
       const r = await fetch('/llama/health', { cache: 'no-store' });
       const j = await r.json().catch(()=>({}));
-      const ok = j && j.import_ok && j.resolved_exists;
-      $('#healthDot').classList.toggle('live', !!ok);
-      $('#healthText').textContent = ok ? 'Ready' : 'Unavailable';
 
-      const select = $('#modelSelect');
-      select.innerHTML = '';
-      (j.discovered || []).forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m;
-        opt.textContent = m.split('/').pop();
-        if (j.resolved_path && (j.resolved_path === m || j.resolved_path.endsWith(opt.textContent))) opt.selected = true;
-        select.appendChild(opt);
-      });
-      $('#ctxText').textContent = (j?.cfg?.n_ctx !== undefined) ? ` • Ctx: ${j.cfg.n_ctx}` : '';
+      const ok = !!(j && j.ok);
+      $('#healthDot')?.classList.toggle('live', ok);
+      if ($('#healthText')) $('#healthText').textContent = ok ? 'Ready' : 'Unavailable';
+
+      // Model selector may be missing on some variants
+      if (modelSelectEl) {
+        modelSelectEl.innerHTML = '';
+
+        // Local models
+        (j.discovered || []).forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = (m.split('/').pop());
+          if (j.resolved_path && (j.resolved_path === m || (j.resolved_path || '').endsWith(opt.textContent))) opt.selected = true;
+          modelSelectEl.appendChild(opt);
+        });
+
+        // Gemini models
+        (j.remotes || []).forEach(name => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = `🌐 ${name}`;
+          if (j.resolved_path === name || (j.selected_is_gemini && !j.resolved_path)) opt.selected = true;
+          modelSelectEl.appendChild(opt);
+        });
+      }
+
+      // Context / backend hint
+      if ($('#ctxText')) {
+        if (j.selected_is_gemini) {
+          $('#ctxText').textContent = ' • Gemini';
+        } else {
+          $('#ctxText').textContent = (j?.cfg?.n_ctx !== undefined) ? ` • Ctx: ${j.cfg.n_ctx}` : '';
+        }
+      }
+
       currentModelPath = j?.resolved_path || j?.cfg?.model_path || currentModelPath || null;
     } catch {
-      $('#healthText').textContent = 'Unavailable';
+      if ($('#healthText')) $('#healthText').textContent = 'Unavailable';
     }
   }
 
   async function switchModel(path, silent = false){
     if (!path || path === currentModelPath) {
-      if ($('#modelSelect')) $('#modelSelect').value = path || $('#modelSelect').value;
+      if (modelSelectEl) modelSelectEl.value = path || modelSelectEl.value;
       return;
     }
     try {
@@ -399,18 +429,18 @@
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       currentModelPath = path;
-      if ($('#modelSelect')) $('#modelSelect').value = path;
-      await updateConversationMeta(currentConversationId, { modelPath: currentModelPath });
-      await health();
+      if (modelSelectEl) modelSelectEl.value = path;
+      if (currentConversationId) await updateConversationMeta(currentConversationId, { modelPath: currentModelPath });
+      await health(); // refresh banner & list
     } catch (e) {
       console.log('switchModel error', e);
     }
   }
 
   function makeBody() {
-    const maxTokensEl = document.getElementById('maxTokens');
-    const temperatureEl = document.getElementById('temperature');
-    const topPEl = document.getElementById('topP');
+    const maxTokensEl = $('#maxTokens');
+    const temperatureEl = $('#temperature');
+    const topPEl = $('#topP');
     return {
       messages: history,
       ...(maxTokensEl ? { max_tokens: Number(maxTokensEl.value || 1024) } : {}),
@@ -430,20 +460,20 @@
 
   function extractHtmlFrom(text) {
     try {
-      const fence = /```html\s*([\s\S]*?)```/i;
-      const m1 = text.match(fence);
-      if (m1 && m1[1]) return m1[1].trim();
+      const matches = [...text.matchAll(/```html\s*([\s\S]*?)```/gi)];
+      if (matches.length) return matches[matches.length - 1][1].trim();
       const hasTag = /<(html|!doctype|head|body|div|section|article|main|header|footer|nav|script|style)[\s>]/i.test(text);
       if (hasTag) return text.trim();
     } catch (e) { console.debug('[extractHtmlFrom] failed', e); }
     return '';
   }
 
+
   function renderPreview(html) {
     try {
-      lastHtmlEl.value = html || '';
+      if (lastHtmlEl) lastHtmlEl.value = html || '';
       const doc = html || '<!DOCTYPE html><meta charset="utf-8"><title>Preview</title><p>No HTML detected.</p>';
-      previewFrame.srcdoc = doc;
+      if (previewFrame) previewFrame.srcdoc = doc;
       console.debug('[preview] updated', { length: doc.length });
     } catch (e) {
       console.warn('[preview] failed', e);
@@ -453,33 +483,29 @@
   function setEditorValue(html) {
     if (!monacoEditor) return;
     const current = monacoEditor.getValue();
-    if (current !== html) {
-      monacoEditor.setValue(html);
-      console.debug('[editor] value set', { length: html.length });
-    }
+    if (current !== html) monacoEditor.setValue(html);
   }
 
-  openInNewBtn.addEventListener('click', () => {
+  on(openInNewBtn, 'click', () => {
     try {
-      const blob = new Blob([previewFrame.srcdoc || ''], { type: 'text/html' });
+      const blob = new Blob([previewFrame?.srcdoc || ''], { type: 'text/html' });
       const url = URL.createObjectURL(blob);
       window.open(url, '_blank', 'noopener,noreferrer');
-      console.debug('[preview] opened in new tab');
     } catch (e) { console.warn('[preview] open failed', e); }
   });
 
-  resetPreviewBtn.addEventListener('click', () => {
+  on(resetPreviewBtn, 'click', () => {
     renderPreview('');
     setEditorValue('');
   });
 
   async function send(){
-    const text = promptEl.value.trim();
+    const text = (promptEl?.value || '').trim();
     if (!text) return;
     history.push({ role: 'user', content: text });
     addMsg('user', text);
-    promptEl.value = '';
-    sendBtn.disabled = true;
+    if (promptEl) promptEl.value = '';
+    if (sendBtn) sendBtn.disabled = true;
 
     await ensureConversation();
     await appendMessage(currentConversationId, { role: 'user', content: text });
@@ -531,7 +557,7 @@
       await appendMessage(currentConversationId, { role: 'assistant', content: 'Error: stream failed' });
       await refreshConvList();
     } finally {
-      sendBtn.disabled = false;
+      if (sendBtn) sendBtn.disabled = false;
     }
   }
 
@@ -547,54 +573,48 @@
     await refreshConvList();
   }
 
-  const themeBtn = $('#themeToggle');
-
+  // Theme
   async function applyTheme(theme) {
     document.documentElement.classList.toggle('light', theme === 'light');
-    themeBtn.textContent = theme === 'light' ? '🌞' : '🌙';
+    if (themeBtn) themeBtn.textContent = theme === 'light' ? '🌞' : '🌙';
     localStorage.setItem('theme', theme);
     await dbPutKV('theme', theme);
   }
-
   async function loadTheme() {
     let theme = localStorage.getItem('theme') || await dbGetKV('theme') || 'dark';
     await applyTheme(theme);
   }
 
-  themeBtn.addEventListener('click', async () => {
+  // Event listeners (null-safe)
+  on(themeBtn, 'click', async () => {
     const isLight = !document.documentElement.classList.contains('light');
     await applyTheme(isLight ? 'light' : 'dark');
     if (monacoEditor) monacoEditor.layout();
   });
-
-  $('#modelSelect').addEventListener('change', e => switchModel(e.target.value));
-  promptEl.addEventListener('keydown', (e)=>{ if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
-  sendBtn.addEventListener('click', send);
-  newChatBtn.addEventListener('click', async () => {
+  on(modelSelectEl, 'change', e => switchModel(e.target.value));
+  on(promptEl, 'keydown', (e)=>{ if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
+  on(sendBtn, 'click', send);
+  on(newChatBtn, 'click', async () => {
     history = [];
     chat.innerHTML = '';
     const conv = await createConversation('Creator chat');
     currentConversationId = conv.id;
     await refreshConvList();
   });
-  searchConv.addEventListener('input', refreshConvList);
-
-  const layout = document.querySelector('.layout');
-  const sidebar = $('#sidebar');
-  const sidebarToggle = $('#sidebarToggle');
+  on(searchConv, 'input', refreshConvList);
 
   async function applySidebarState(collapsed) {
     document.documentElement.classList.toggle('sidebar-collapsed', collapsed);
-    try { await dbPutKV('sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
-    try { document.cookie = `sidebarCollapsed=${collapsed ? '1' : '0'}; Path=/; Max-Age=31536000; SameSite=Lax`; } catch (e) {}
+    try { await dbPutKV('sidebarCollapsed', collapsed ? '1' : '0'); } catch {}
+    try { document.cookie = `sidebarCollapsed=${collapsed ? '1' : '0'}; Path=/; Max-Age=31536000; SameSite=Lax`; } catch {}
     if (monacoEditor) monacoEditor.layout();
   }
-
-  sidebarToggle.addEventListener('click', async () => {
+  on(sidebarToggle, 'click', async () => {
     const next = !document.documentElement.classList.contains('sidebar-collapsed');
     await applySidebarState(next);
   });
 
+  // Monaco
   function initMonaco() {
     if (!window.require) { console.warn('[monaco] loader not available'); return; }
     if (!codeEl) { console.warn('[monaco] #codeEditor not found'); return; }
@@ -608,7 +628,7 @@
         automaticLayout: false,
         minimap: { enabled: false },
         wordWrap: 'on',
-        fontSize: 13,
+        fontSize: 11,
         lineNumbers: 'on'
       });
 
@@ -619,15 +639,14 @@
       if (window.ResizeObserver) {
         const ro = new ResizeObserver(() => { if (monacoEditor) monacoEditor.layout(); });
         ro.observe(codeEl);
-      if (editorShell) ro.observe(editorShell);      // NEW: track shell size changes
-      if (editorDetails) ro.observe(editorDetails);  // reflow when details toggles
-    }
+        if (editorShell) ro.observe(editorShell);
+        if (editorDetails) ro.observe(editorDetails);
+      }
 
-    window.addEventListener('resize', () => monacoEditor && monacoEditor.layout());
-    console.debug('[monaco] ready');
-  });
+      window.addEventListener('resize', () => monacoEditor && monacoEditor.layout());
+      console.debug('[monaco] ready');
+    });
   }
-
 
   async function applySavedEditorHeight() {
     try {
@@ -635,19 +654,16 @@
       if (!h) h = localStorage.getItem(EDITOR_HEIGHT_KEY);
       if (h && editorShell) {
         const px = Math.max(150, parseInt(h, 10) || 0);
-      // Use CSS var so the stylesheet rule controls height
         editorShell.style.setProperty('--editor-h', px + 'px');
       }
-    } catch (e) {}
+    } catch {}
   }
-
   function persistEditorHeight() {
     if (!editorShell) return;
     const px = Math.round(editorShell.getBoundingClientRect().height);
     dbPutKV(EDITOR_HEIGHT_KEY, String(px)).catch(()=>{});
-    try { localStorage.setItem(EDITOR_HEIGHT_KEY, String(px)); } catch (e) {}
+    try { localStorage.setItem(EDITOR_HEIGHT_KEY, String(px)); } catch {}
   }
-
   function watchEditorHeight() {
     if (!editorShell || !window.ResizeObserver) return;
     const obs = new ResizeObserver(() => {
@@ -655,8 +671,6 @@
       if (monacoEditor) monacoEditor.layout();
     });
     obs.observe(editorShell);
-
-  // also react to details open/close
     if (editorDetails) {
       editorDetails.addEventListener('toggle', () => {
         persistEditorHeight();
@@ -665,33 +679,30 @@
     }
   }
 
-
+  // Boot
   (async function boot(){
     await loadTheme();
     await health();
     await refreshConvList();
 
-    await applySavedEditorHeight();   // ⟵ restore last editor height before Monaco mounts
-
+    await applySavedEditorHeight();
     const lastId = await dbGetKV('lastCreatorConversationId');
     if (lastId) await loadConversationIntoUI(lastId);
 
     const isCollapsed = document.documentElement.classList.contains('sidebar-collapsed');
-    try { await dbPutKV('sidebarCollapsed', isCollapsed ? '1' : '0'); } catch (e) {}
+    try { await dbPutKV('sidebarCollapsed', isCollapsed ? '1' : '0'); } catch {}
 
-    layout.classList.add('anim');
-    sidebar.classList.add('anim');
+    layout?.classList.add('anim');
+    sidebar?.classList.add('anim');
     renderPreview('');
 
-    await applySavedEditorHeight(); // before initMonaco()
+    await applySavedEditorHeight();
     initMonaco();
-    watchEditorHeight();            // after initMonaco()
+    watchEditorHeight();
 
-    watchEditorHeight();              // ⟵ start persisting height changes
     console.debug('[creator] boot complete', { isCollapsed });
   })();
 </script>
-
 
 
 

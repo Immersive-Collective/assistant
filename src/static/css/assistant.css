@@ -130,7 +130,7 @@ html, body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: 0 4px 12px rgba(0,0,0,.1);
-  font-size: 14px;
+  font-size: 0.8rem;
   line-height: 1.45;
   word-wrap: break-word;
   overflow-wrap: anywhere;
@@ -225,7 +225,7 @@ button:disabled {
 /* Preformatted */
 .msg .pre {
   white-space: pre-wrap;
-  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: inherit;
 }
 

@@ -34,3 +34,15 @@
   block-size: 100%;
   inline-size: 100%;
 }
+
+#divider {
+  flex:0 0 auto;
+  background: var(--border);
+  cursor: col-resize;
+  user-select: none;
+}
+
+.conv-title {
+  white-space: normal;        /* allow wrapping */
+  overflow-wrap: anywhere;    /* break long words/strings */
+}
