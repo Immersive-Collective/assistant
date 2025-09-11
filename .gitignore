@@ -212,3 +212,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+.DS_Store
+archive/google/*.json
+archive/google/*.txt

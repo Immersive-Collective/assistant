@@ -26,6 +26,7 @@
         </label>
         <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">🌙</button>
         <span id="ctxText"></span>
+        <span id="limitText" class="meta"></span>
       </span>
     </div>
 
@@ -369,6 +370,8 @@
     renderConvList(items);
   }
 
+
+
   async function health(){
     try {
       const r = await fetch('/llama/health', { cache: 'no-store' });
@@ -378,7 +381,7 @@
       $('#healthDot')?.classList.toggle('live', ok);
       if ($('#healthText')) $('#healthText').textContent = ok ? 'Ready' : 'Unavailable';
 
-      // Model selector may be missing on some variants
+      // Model selector (local + remotes)
       if (modelSelectEl) {
         modelSelectEl.innerHTML = '';
 
@@ -395,18 +398,40 @@
         (j.remotes || []).forEach(name => {
           const opt = document.createElement('option');
           opt.value = name;
-          opt.textContent = `🌐 ${name}`;
+          const via = (j.remotes_details && j.remotes_details[name] && j.remotes_details[name].via) ? ` • ${j.remotes_details[name].via}` : '';
+          const img = (j.remotes_details && j.remotes_details[name] && j.remotes_details[name].image) ? '🖼 ' : '';
+          opt.textContent = `🌐 ${img}${name}${via}`;
           if (j.resolved_path === name || (j.selected_is_gemini && !j.resolved_path)) opt.selected = true;
           modelSelectEl.appendChild(opt);
         });
       }
 
-      // Context / backend hint
-      if ($('#ctxText')) {
+      // Context / backend hint + current remote info
+      const ctx = $('#ctxText');
+      if (ctx) {
         if (j.selected_is_gemini) {
-          $('#ctxText').textContent = ' • Gemini';
+          let extra = '';
+          if (j.current_remote) {
+            const cr = j.current_remote;
+            extra = ` • ${cr.name}${cr.image ? ' (image:' + (cr.via || '?') + ')' : ''}`;
+          }
+          ctx.textContent = ' • Gemini' + extra;
         } else {
-          $('#ctxText').textContent = (j?.cfg?.n_ctx !== undefined) ? ` • Ctx: ${j.cfg.n_ctx}` : '';
+          ctx.textContent = (j?.cfg?.n_ctx !== undefined) ? ` • Ctx: ${j.cfg.n_ctx}` : '';
+        }
+      }
+
+      // Rate limits (last-seen headers)
+      const lt = $('#limitText');
+      if (lt) {
+        const rl = j.ratelimit || {};
+        const limitReq = rl['x-ratelimit-limit-requests'] || rl['ratelimit-limit'] || '';
+        const remainReq = rl['x-ratelimit-remaining-requests'] || rl['ratelimit-remaining'] || '';
+        const reset = rl['x-ratelimit-reset-requests'] || rl['ratelimit-reset'] || '';
+        if (limitReq || remainReq) {
+          lt.textContent = ` • RPM ${remainReq}/${limitReq}` + (reset ? ` (reset ${reset}s)` : '');
+        } else {
+          lt.textContent = '';
         }
       }
 
@@ -415,6 +440,7 @@
       if ($('#healthText')) $('#healthText').textContent = 'Unavailable';
     }
   }
+
 
   async function switchModel(path, silent = false){
     if (!path || path === currentModelPath) {
@@ -428,14 +454,22 @@
         body: JSON.stringify({ model_path: path })
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
+      const j = await res.json();
       currentModelPath = path;
       if (modelSelectEl) modelSelectEl.value = path;
       if (currentConversationId) await updateConversationMeta(currentConversationId, { modelPath: currentModelPath });
-      await health(); // refresh banner & list
+
+      // announce visibly in chat
+      const viaTxt = (j?.image ? `image via ${j?.via || '?'}` : 'text-only');
+      addMsg('asst', `Switched model → ${j?.model || path} (${viaTxt})`);
+
+      await health(); // refresh banner & limits
     } catch (e) {
       console.log('switchModel error', e);
     }
   }
+
+
 
   function makeBody() {
     const maxTokensEl = $('#maxTokens');
@@ -499,6 +533,8 @@
     setEditorValue('');
   });
 
+
+
   async function send(){
     const text = (promptEl?.value || '').trim();
     if (!text) return;
@@ -526,26 +562,86 @@
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let asstText = '';
-      const live = addMsg('asst', '');
+
+    // Create assistant message DOM node that can accept HTML (for images/code-fenced html)
+      const liveWrap = document.createElement('div');
+      liveWrap.className = 'msg asst';
+      const livePre = document.createElement('div');
+      livePre.className = 'pre';
+      liveWrap.appendChild(livePre);
+      const liveTs = document.createElement('div');
+      liveTs.className = 'ts';
+      liveTs.textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      liveWrap.appendChild(liveTs);
+      chat.appendChild(liveWrap);
+      chat.scrollTop = chat.scrollHeight;
+
+    // create assistant placeholder in DB
       await appendMessage(currentConversationId, { role: 'assistant', content: '' });
 
+    // helper to update live DOM safely (uses DOMPurify if available)
+      // function injectHTML(targetEl, html) {
+      //   if (typeof DOMPurify !== 'undefined' && DOMPurify && DOMPurify.sanitize) {
+      //     targetEl.innerHTML = DOMPurify.sanitize(html, {ALLOWED_TAGS: false});
+      //   } else {
+      //     targetEl.innerHTML = html;
+      //   }
+      // }
+
+      function updateLiveDOM(text) {
+  // Always show plain text in the chat bubble to avoid DOM/CSS injection
+        livePre.textContent = text;
+
+  // Optionally show a generated image (strict whitelist: same-origin /static/gen/)
+        const m = text.match(/<img\s+[^>]*src=['"]?([^'"> ]+)['"]?[^>]*>/i);
+        if (m && m[1]) {
+          try {
+            const u = new URL(m[1], location.href);
+            if (u.origin === location.origin && u.pathname.startsWith('/static/gen/')) {
+              const img = new Image();
+              img.loading = 'lazy';
+              img.decoding = 'async';
+              img.alt = 'Generated image';
+              img.src = u.href;
+
+        // Place image below the text (no innerHTML)
+              const container = document.createElement('div');
+              container.style.marginTop = '8px';
+              container.appendChild(img);
+
+        // Ensure we don't accumulate many duplicates while streaming
+              const old = livePre.parentElement.querySelector('.asst-inline-img');
+              if (old) old.remove();
+              container.className = 'asst-inline-img';
+              livePre.parentElement.appendChild(container);
+            }
+          } catch (_) {}
+        }
+      }
+
+
+    // streaming loop
       while (true) {
         const {done, value} = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
         asstText += chunk;
-        live.textContent = asstText;
+        updateLiveDOM(asstText);
+        chat.scrollTop = chat.scrollHeight;
       }
 
+    // finished streaming: persist assistant content
       history.push({ role: 'assistant', content: asstText });
       await overwriteAssistantMessage(currentConversationId, 0, asstText);
 
+    // Extract HTML for preview/editor as before
       const html = extractHtmlFrom(asstText);
       if (html) {
         renderPreview(html);
         setEditorValue(html);
       }
 
+    // update conversation title & list
       const titleCandidate = history.find(m => m.role === 'user')?.content || 'Creator chat';
       const newTitle = titleCandidate.slice(0, 60).trim();
       await updateConversationMeta(currentConversationId, { title: newTitle });
@@ -560,6 +656,11 @@
       if (sendBtn) sendBtn.disabled = false;
     }
   }
+
+
+
+
+
 
   async function loadConversationIntoUI(id) {
     const conv = await getConversation(id);
