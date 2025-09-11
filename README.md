@@ -3,6 +3,12 @@
 Minimal, fast, **in-process** assistant UI with streaming responses.  
 Backed by `llama.cpp` via `llama-cpp-python`. Works with a local **GGUF** model.
 
+
+<img width="473" height="1426" alt="Screenshot 2025-09-11 at 16 12 49" src="https://github.com/user-attachments/assets/94773a63-6df6-40e9-8c17-3e18f224a57e" />
+<img width="459" height="74" alt="Screenshot 2025-09-11 at 16 12 57" src="https://github.com/user-attachments/assets/36093429-b0fb-48b0-8751-88d2868dc75a" />
+
+
+
 ---
 
 ## Directory layout
